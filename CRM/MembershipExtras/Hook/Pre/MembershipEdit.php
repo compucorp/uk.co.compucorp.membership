@@ -62,6 +62,7 @@ class CRM_MembershipExtras_Hook_Pre_MembershipEdit {
    */
   public function preProcess() {
     if ($this->paymentContributionID || $this->isRecordingPayment() || $this->isBulkStatusUpdate()) {
+      $this->preventEditingTheActiveMembershipIfItsContributionHasAnotherPayment();
       $this->preventExtendingPaymentPlanMembership();
     }
 
@@ -155,6 +156,56 @@ class CRM_MembershipExtras_Hook_Pre_MembershipEdit {
     if ($this->isOfflinePaymentPlanMembership()) {
       unset($this->params['end_date']);
     }
+  }
+
+  /**
+   * Prevents editing the active Membership if its non payment-plan
+   * contribution has another payment.
+   *
+   * Usually recording the payment for the membership's contribution means :
+   *
+   * - Activating the membership by changing its status from pending to active.
+   * - Renewing the membership by extending its end_date.
+   *
+   * At Compucorp, we use the "biz.jmaconsulting.lineitemedit" extension to add
+   * and edit the line items.
+   *
+   * Adding a line item changes the contribution status to "Partially Paid"
+   * and recording a payment for an active membership's contribution will renew
+   * it by default and extend its end_date, but this is undesirable behaviour
+   * and this method will prevent it.
+   */
+  public function preventEditingTheActiveMembershipIfItsContributionHasAnotherPayment() {
+    // Check if the contribution is a non payment plan.
+    $recContributionID = $this->getMembershipRecurringContributionID();
+    if ($recContributionID !== NULL) {
+      return FALSE;
+    }
+
+    // Check if the membership is active.
+    $result = civicrm_api3('Membership', 'get', [
+      'sequential' => 1,
+      'active_only' => 1,
+      'id' => $this->id,
+    ]);
+    if ($result['count'] < 1) {
+      return;
+    }
+
+    // Check if the contribution is "Partially paid".
+    $result = civicrm_api3('Contribution', 'getcount', [
+      'sequential' => 1,
+      'return' => ["contribution_status_id"],
+      'id' => $this->paymentContributionID,
+      'contribution_status_id' => "Partially paid",
+    ]);
+    if ($result['count'] < 1) {
+      return;
+    }
+
+    $this->params = [
+      'id' => $this->params['id'],
+    ];
   }
 
   /**
